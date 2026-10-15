@@ -3,13 +3,17 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <cinttypes>
 #include "hack.h"
 #include "zygisk.hpp"
-#include "game.h"
 #include "log.h"
+
+// 运行时目标包名。编译不再写死，启动游戏前执行：
+//   su -c setprop dump.il2cpp <包名>
+// 属性为空或与当前进程不一致时卸载模块。重启后属性会丢失，需要重新设置。
 
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
@@ -23,11 +27,21 @@ public:
     }
 
     void preAppSpecialize(AppSpecializeArgs *args) override {
-        auto package_name = env->GetStringUTFChars(args->nice_name, nullptr);
-        auto app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
+        const char *package_name = nullptr;
+        const char *app_data_dir = nullptr;
+        if (args->nice_name != nullptr) {
+            package_name = env->GetStringUTFChars(args->nice_name, nullptr);
+        }
+        if (args->app_data_dir != nullptr) {
+            app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
+        }
         preSpecialize(package_name, app_data_dir);
-        env->ReleaseStringUTFChars(args->nice_name, package_name);
-        env->ReleaseStringUTFChars(args->app_data_dir, app_data_dir);
+        if (package_name != nullptr) {
+            env->ReleaseStringUTFChars(args->nice_name, package_name);
+        }
+        if (app_data_dir != nullptr) {
+            env->ReleaseStringUTFChars(args->app_data_dir, app_data_dir);
+        }
     }
 
     void postAppSpecialize(const AppSpecializeArgs *) override {
@@ -40,13 +54,16 @@ public:
 private:
     Api *api;
     JNIEnv *env;
-    bool enable_hack;
-    char *game_data_dir;
-    void *data;
-    size_t length;
+    bool enable_hack = false;
+    char *game_data_dir = nullptr;
+    void *data = nullptr;
+    size_t length = 0;
 
     void preSpecialize(const char *package_name, const char *app_data_dir) {
-        if (strcmp(package_name, GamePackageName) == 0) {
+        char prop[PROP_VALUE_MAX] = {};
+        __system_property_get("dump.il2cpp", prop);
+        if (prop[0] != '\0' && package_name != nullptr && app_data_dir != nullptr &&
+            strcmp(package_name, prop) == 0) {
             LOGI("detect game: %s", package_name);
             enable_hack = true;
             game_data_dir = new char[strlen(app_data_dir) + 1];
